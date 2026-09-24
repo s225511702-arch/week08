@@ -1,0 +1,27 @@
+# kube-prometheus-stack settings for the KoalaTech AKS cluster
+
+# AKS manages the control plane, so these components cannot be scraped.
+# Disabling them avoids permanently "down" targets in Prometheus.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    # Pick up ServiceMonitors/PodMonitors from any namespace, not only Helm-labelled ones
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+grafana:
+  defaultDashboardsTimezone: browser
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"

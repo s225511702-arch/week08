@@ -14,8 +14,7 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
 
-    if: >
-      ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: github.event.workflow_run.conclusion == 'success'
 
     environment:
       name: staging
@@ -144,8 +143,63 @@ jobs:
             -n staging \
             --timeout=300s
 
-      - name: Show staging resources
+      # =========================================================
+      # NEW: Monitoring - Prometheus and Grafana
+      # =========================================================
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy Prometheus and Grafana (kube-prometheus-stack)
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace \
+            --version 91.4.1 \
+            -f monitoring/values.yaml \
+            --wait \
+            --timeout 10m
+
+      - name: Load KoalaTech Grafana dashboard
+        run: |
+          kubectl create configmap koalatech-dashboard \
+            --namespace monitoring \
+            --from-file=monitoring/dashboards/koalatech-overview.json \
+            --dry-run=client -o yaml \
+          | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+          | kubectl apply -f -
+
+      - name: Validate monitoring stack
+        run: |
+          kubectl rollout status deployment/monitoring-grafana -n monitoring --timeout=300s
+          kubectl rollout status deployment/monitoring-kube-state-metrics -n monitoring --timeout=300s
+          kubectl rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus -n monitoring --timeout=300s
+
+          echo "Checking Grafana health..."
+          kubectl get --raw "/api/v1/namespaces/monitoring/services/monitoring-grafana:http-web/proxy/api/health"
+          echo
+
+          echo "Checking Prometheus is collecting metrics from the staging namespace..."
+          QUERY="count(kube_pod_info%7Bnamespace%3D%22staging%22%7D)"
+          for i in $(seq 1 20); do
+            RESULT=$(kubectl get --raw "/api/v1/namespaces/monitoring/services/monitoring-kube-prometheus-prometheus:http-web/proxy/api/v1/query?query=${QUERY}" \
+              | jq -r '.data.result[0].value[1] // "0"')
+            if [ "$RESULT" != "0" ]; then
+              echo "Prometheus is collecting metrics for $RESULT staging pods."
+              echo "## Monitoring validation" >> "$GITHUB_STEP_SUMMARY"
+              echo "Prometheus is collecting metrics for **$RESULT** pods in the staging namespace." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Waiting for Prometheus to scrape staging pods ($i/20)..."
+            sleep 15
+          done
+          echo "Prometheus returned no staging metrics."
+          exit 1
+
+      - name: Show staging and monitoring resources
         run: |
           kubectl get pods -n staging
           kubectl get services -n staging
           kubectl get pvc -n staging
+          kubectl get pods -n monitoring
