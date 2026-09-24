@@ -1,12 +1,8 @@
 name: 01 - CI
 
 on:
-  # NEW: run after the infrastructure workflow finishes on main
-  workflow_run:
-    workflows:
-      - "00 - Infrastructure"
-    types:
-      - completed
+  # Run on every push to main - Terraform runs first, as a job below
+  push:
     branches:
       - main
 
@@ -23,14 +19,23 @@ env:
 jobs:
 
   # =========================================================
+  # NEW: Infrastructure - reusable Terraform workflow (00)
+  # =========================================================
+  infrastructure:
+    name: Terraform
+    uses: ./.github/workflows/00-infrastructure.yml
+    secrets: inherit
+
+  # =========================================================
   # Backend Tests
   # =========================================================
   backend-test:
     name: Test ${{ matrix.service }}
     runs-on: ubuntu-latest
 
-    # NEW: only continue if infrastructure succeeded (or on a manual run)
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # NEW: tests only start once Terraform has succeeded
+    needs:
+      - infrastructure
 
     strategy:
       fail-fast: false
